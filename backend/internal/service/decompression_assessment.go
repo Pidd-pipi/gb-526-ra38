@@ -99,6 +99,52 @@ func (s *DecompressionAssessmentService) Approve(ctx context.Context, id uint, r
 	return s.transition(ctx, id, req, constants.PlanApprovedTraining, actor)
 }
 
+// Reopen carries a modeled or pending-review plan back to draft and supersedes
+// its latest assessment in one transaction. The planner must present the
+// current plan version and a reason; approved plans, stale versions and
+// concurrent attempts reject the whole request unchanged.
+func (s *DecompressionAssessmentService) Reopen(ctx context.Context, planID uint, req dto.ReopenPlanRequest, actor audit.Entry) (dto.ReopenPlanResponse, error) {
+	reason := strings.TrimSpace(req.Reason)
+	plan, err := s.plans.Get(ctx, planID)
+	if err != nil {
+		return dto.ReopenPlanResponse{}, err
+	}
+	if plan.Version != req.Version {
+		return dto.ReopenPlanResponse{}, util.Conflict("PLAN_VERSION_CONFLICT", "dive plan was changed by another user", nil)
+	}
+	if !constants.CanReopenPlan(plan.PlanStatus) {
+		return dto.ReopenPlanResponse{}, util.Unprocessable("INVALID_PLAN_TRANSITION", fmt.Sprintf("only modeled or pending_supervisor_review plans can reopen, current status %s", plan.PlanStatus), nil)
+	}
+	assessment, err := s.assessments.LatestByPlan(ctx, planID)
+	if err != nil {
+		return dto.ReopenPlanResponse{}, err
+	}
+	if string(plan.PlanStatus) != assessment.AssessmentStatus {
+		return dto.ReopenPlanResponse{}, util.Conflict("ASSESSMENT_STATE_CONFLICT", "latest assessment and plan review states do not match", nil)
+	}
+	actor.Action = "dive_plan.reopen"
+	actor.EntityType = "dive_plan"
+	actor.BeforeSummary = string(plan.PlanStatus)
+	actor.AfterSummary = fmt.Sprintf("%s reason=%s", constants.PlanDraft, reason)
+	updatedPlan, updatedAssessment, err := s.assessments.Reopen(ctx, plan, assessment, reason, actor)
+	if err != nil {
+		return dto.ReopenPlanResponse{}, err
+	}
+	profile, err := s.profiles.Get(ctx, updatedPlan.DiverProfileID)
+	if err != nil {
+		return dto.ReopenPlanResponse{}, err
+	}
+	planResponse, err := dto.NewDivePlanResponse(updatedPlan, profile.ProfileCode)
+	if err != nil {
+		return dto.ReopenPlanResponse{}, err
+	}
+	assessmentResponse, err := dto.DecodeAssessment(updatedAssessment)
+	if err != nil {
+		return dto.ReopenPlanResponse{}, err
+	}
+	return dto.ReopenPlanResponse{Plan: planResponse, Assessment: assessmentResponse}, nil
+}
+
 func (s *DecompressionAssessmentService) transition(ctx context.Context, id uint, req dto.TransitionPlanRequest, target constants.PlanStatus, actor audit.Entry) (dto.AssessmentResponse, error) {
 	if req.TargetStatus != target {
 		return dto.AssessmentResponse{}, util.Unprocessable("INVALID_PLAN_TRANSITION", fmt.Sprintf("endpoint requires target_status %s", target), nil)
@@ -106,6 +152,9 @@ func (s *DecompressionAssessmentService) transition(ctx context.Context, id uint
 	assessment, err := s.assessments.Get(ctx, id)
 	if err != nil {
 		return dto.AssessmentResponse{}, err
+	}
+	if assessment.AssessmentStatus == string(constants.AssessmentSuperseded) {
+		return dto.AssessmentResponse{}, util.Conflict("ASSESSMENT_SUPERSEDED", "this assessment was superseded by a plan reopen and can no longer be submitted or approved", nil)
 	}
 	plan, err := s.plans.Get(ctx, assessment.PlanID)
 	if err != nil {

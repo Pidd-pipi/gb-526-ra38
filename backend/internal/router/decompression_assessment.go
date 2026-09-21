@@ -7,6 +7,7 @@ import (
 
 func RegisterDecompressionAssessmentRoutes(api *gin.RouterGroup, h *handler.DecompressionAssessmentHandler, write, review gin.HandlerFunc) {
 	api.POST("/plans/:id/assessments/run", write, h.Run)
+	api.POST("/plans/:id/reopen", write, h.Reopen)
 	assessments := api.Group("/assessments")
 	assessments.GET("", h.List)
 	assessments.GET("/:id", h.Get)

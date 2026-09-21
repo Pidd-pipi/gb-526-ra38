@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, MenuItem, TextField } from '@mui/material'
-import { ArrowRight, CheckCheck, GitCompareArrows, ShieldAlert, Send } from 'lucide-react'
+import { ArrowRight, Ban, CheckCheck, GitCompareArrows, History, ShieldAlert, Send } from 'lucide-react'
 import { AssumptionPanel } from '@/components/common/AssumptionPanel'
 import { PageHeader } from '@/components/common/PageHeader'
 import { PlanStatusBadge } from '@/components/common/PlanStatusBadge'
@@ -23,6 +23,7 @@ export function AssessmentsPage() {
   useAssessmentPolling(true)
   const selected = assessments.selected
   const selectedPlan = useMemo(() => plans.items.find((plan) => plan.id === selected?.plan_id), [plans.items, selected?.plan_id])
+  const superseded = selected?.assessment_status === 'superseded'
   const transition = async (kind: 'submit' | 'approve') => {
     if (!selected) return
     setBusy(true); setLocalError(null); setNotice(null)
@@ -48,7 +49,11 @@ export function AssessmentsPage() {
         <section className="assessment-detail">
           {selected ? <>
             <div className="assessment-title"><div><span className="eyebrow">ASSESSMENT #{selected.id}</span><h2>{selectedPlan?.plan_code ?? `Plan ${selected.plan_id}`}</h2><p>Created {new Date(selected.created_at).toLocaleString()} · input snapshot preserved</p></div><div className="score-dial"><span>COMPARATIVE INDEX</span><strong>{selected.comparative_score.toFixed(1)}</strong><small>{selected.highest_risk_band} · not a safety score</small></div></div>
-            <div className="review-bar"><PlanStatusBadge status={selected.assessment_status} /><TextField label="Review reason" value={reason} onChange={(event) => setReason(event.target.value)} fullWidth />{isPlanner && selected.assessment_status === 'modeled' && <Button variant="contained" startIcon={<Send size={17} />} disabled={busy || reason.length < 3} onClick={() => void transition('submit')}>Submit</Button>}{isSupervisor && selected.assessment_status === 'pending_supervisor_review' && <Button variant="contained" color="secondary" startIcon={<CheckCheck size={17} />} disabled={busy || reason.length < 3} onClick={() => void transition('approve')}>Approve training</Button>}</div>
+            {superseded && <Alert severity="warning" icon={<Ban size={20} />}>
+              <strong>This result is superseded and cannot be reviewed.</strong> The plan was reopened and returned to draft; this snapshot remains readable for comparison but submit and approve are permanently closed.
+              {selected.supersede_reason && <><br /><History size={13} style={{ verticalAlign: -2, marginRight: 4 }} />Reopen reason: {selected.supersede_reason}</>}
+            </Alert>}
+            <div className="review-bar"><PlanStatusBadge status={selected.assessment_status} /><TextField label="Review reason" value={reason} onChange={(event) => setReason(event.target.value)} fullWidth disabled={superseded} />{!superseded && isPlanner && selected.assessment_status === 'modeled' && <Button variant="contained" startIcon={<Send size={17} />} disabled={busy || reason.length < 3} onClick={() => void transition('submit')}>Submit</Button>}{!superseded && isSupervisor && selected.assessment_status === 'pending_supervisor_review' && <Button variant="contained" color="secondary" startIcon={<CheckCheck size={17} />} disabled={busy || reason.length < 3} onClick={() => void transition('approve')}>Approve training</Button>}{superseded && <Button variant="outlined" color="warning" startIcon={<Ban size={16} />} disabled>Not reviewable</Button>}</div>
             <section className="risk-section"><div className="subheading">Risk evidence <span>{selected.risk_flags.length}</span></div><div className="risk-list">{selected.risk_flags.map((flag) => <article className={`risk-row risk-${flag.band}`} key={flag.code}><ShieldAlert size={18} /><div><strong>{flag.code.replaceAll('_', ' ')}</strong><p>{flag.message}</p><small>{flag.evidence}</small></div><span>{flag.band}</span></article>)}</div></section>
             <div className="compartment-grid">{selected.compartment_loads.map((curve) => { const last = curve.points.at(-1); return <div key={curve.name}><span>{curve.name}</span><strong>{last?.total_inert_bar.toFixed(3)} bar</strong><small>N2 t½ {curve.n2_half_time_min} · He t½ {curve.he_half_time_min}</small></div> })}</div>
             <AssumptionPanel assumptions={selected.assumptions} />
@@ -60,3 +65,4 @@ export function AssessmentsPage() {
     </div>
   )
 }
+

@@ -24,3 +24,25 @@ func TestPlanTransitions(t *testing.T) {
 		})
 	}
 }
+
+func TestCanReopenPlan(t *testing.T) {
+	tests := []struct {
+		name   string
+		status PlanStatus
+		want   bool
+	}{
+		{"draft has no model to replace", PlanDraft, false},
+		{"modeled carries reopen entry", PlanModeled, true},
+		{"pending review carries reopen entry", PlanPendingReview, true},
+		{"approved plan is locked", PlanApprovedTraining, false},
+		{"archived plan is terminal", PlanArchived, false},
+		{"superseded assessment is not a plan state", AssessmentSuperseded, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := CanReopenPlan(test.status); got != test.want {
+				t.Fatalf("CanReopenPlan(%s) = %t, want %t", test.status, got, test.want)
+			}
+		})
+	}
+}

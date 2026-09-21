@@ -14,6 +14,16 @@ type RunAssessmentRequest struct {
 	PlanVersion uint `json:"plan_version" binding:"required,min=1"`
 }
 
+type ReopenPlanRequest struct {
+	Version uint   `json:"version" binding:"required,min=1"`
+	Reason  string `json:"reason" binding:"required,min=3,max=300"`
+}
+
+type ReopenPlanResponse struct {
+	Plan       DivePlanResponse   `json:"plan"`
+	Assessment AssessmentResponse `json:"superseded_assessment"`
+}
+
 type AssessmentResponse struct {
 	ID               uint                             `json:"id"`
 	PlanID           uint                             `json:"plan_id"`
@@ -25,6 +35,7 @@ type AssessmentResponse struct {
 	HighestRiskBand  constants.RiskBand               `json:"highest_risk_band"`
 	ComparativeScore float64                          `json:"comparative_score"`
 	Assumptions      decompression.ModelAssumptions   `json:"assumptions"`
+	SupersedeReason  string                           `json:"supersede_reason"`
 	CreatedAt        time.Time                        `json:"created_at"`
 	ReviewedAt       *time.Time                       `json:"reviewed_at"`
 	SafetyDisclaimer string                           `json:"safety_disclaimer"`
@@ -42,7 +53,7 @@ type AssessmentComparison struct {
 const SafetyDisclaimer = "Training and decision support only. This result is not medical advice, a certified dive table, a safety clearance, or an executable decompression instruction. Human supervisor review is required."
 
 func DecodeAssessment(item model.DecompressionAssessment) (AssessmentResponse, error) {
-	response := AssessmentResponse{ID: item.ID, PlanID: item.PlanID, AssessmentStatus: item.AssessmentStatus, AlgorithmVersion: item.AlgorithmVersion, HighestRiskBand: item.HighestRiskBand, ComparativeScore: item.ComparativeScore, CreatedAt: item.CreatedAt, ReviewedAt: item.ReviewedAt, SafetyDisclaimer: SafetyDisclaimer}
+	response := AssessmentResponse{ID: item.ID, PlanID: item.PlanID, AssessmentStatus: item.AssessmentStatus, AlgorithmVersion: item.AlgorithmVersion, HighestRiskBand: item.HighestRiskBand, ComparativeScore: item.ComparativeScore, SupersedeReason: item.SupersedeReason, CreatedAt: item.CreatedAt, ReviewedAt: item.ReviewedAt, SafetyDisclaimer: SafetyDisclaimer}
 	parts := []struct {
 		name string
 		raw  string

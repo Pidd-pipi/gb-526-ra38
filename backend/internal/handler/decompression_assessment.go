@@ -74,6 +74,23 @@ func (h *DecompressionAssessmentHandler) Run(c *gin.Context) {
 	util.Created(c, item)
 }
 
+func (h *DecompressionAssessmentHandler) Reopen(c *gin.Context) {
+	planID, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	var req dto.ReopenPlanRequest
+	if !util.BindJSON(c, &req) {
+		return
+	}
+	result, err := h.service.Reopen(c.Request.Context(), planID, req, auditActor(c))
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.OK(c, result)
+}
+
 func (h *DecompressionAssessmentHandler) Submit(c *gin.Context) {
 	id, ok := util.ParamID(c)
 	if !ok {

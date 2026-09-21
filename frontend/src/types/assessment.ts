@@ -51,9 +51,15 @@ export interface DecompressionAssessment {
   highest_risk_band: RiskBand
   comparative_score: number
   assumptions: ModelAssumptions
+  supersede_reason: string
   created_at: string
   reviewed_at?: string
   safety_disclaimer: string
+}
+
+export interface ReopenPlanResult {
+  plan: DivePlan
+  superseded_assessment: DecompressionAssessment
 }
 
 export interface AssessmentComparison {

@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Alert, Button, CircularProgress, IconButton, MenuItem, TextField, Tooltip } from '@mui/material'
-import { ArrowDown, ArrowUp, Beaker, CirclePlus, Play, Route, Rows3 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Beaker, CirclePlus, History, Play, Route, Rows3 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { PlanStatusBadge } from '@/components/common/PlanStatusBadge'
+import { ReopenDialog } from '@/components/common/ReopenDialog'
+import { listAssessments } from '@/api/assessment'
 import { useAuth } from '@/hooks/useAuth'
 import { useAssessmentStore } from '@/stores/assessment'
 import { useDiverStore } from '@/stores/diver'
 import { usePlanStore } from '@/stores/plan'
 import { useSegmentStore } from '@/stores/segment'
+import type { DecompressionAssessment } from '@/types/assessment'
 import type { CreateDivePlan } from '@/types/plan'
 import type { CreateExposureSegment, SegmentType } from '@/types/segment'
 
 const planInitial: CreateDivePlan = { plan_code: '', diver_profile_id: 0, worksite_pressure_bar: 1, breathing_mix: { o2: .21, he: 0, n2: .79 }, planned_at: new Date(Date.now() + 86_400_000).toISOString().slice(0, 16) }
 const segmentInitial = { depth_m: 0, duration_min: 5, ascent_rate_mmin: 0, gas_mix: { o2: .21, he: 0, n2: .79 }, segment_type: 'bottom' as SegmentType, notes: '' }
+const reopenableStatuses = new Set(['modeled', 'pending_supervisor_review'])
 
 export function PlansPage() {
   const { isPlanner } = useAuth()
@@ -26,10 +30,19 @@ export function PlansPage() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
+  const [planAssessments, setPlanAssessments] = useState<DecompressionAssessment[]>([])
+  const [reopenOpen, setReopenOpen] = useState(false)
   useEffect(() => { void plans.load(); void divers.load() }, [plans.load, divers.load])
   useEffect(() => { if (plans.selected) void segments.load(plans.selected.id) }, [plans.selected?.id])
   const selected = plans.selected
-  const choosePlan = async (id: number) => { await plans.select(id); await segments.load(id); setNotice(null) }
+  const latestAssessment = planAssessments[0] ?? null
+  useEffect(() => {
+    if (!selected) { setPlanAssessments([]); return }
+    let cancelled = false
+    listAssessments(selected.id).then((page) => { if (!cancelled) setPlanAssessments(page.items) }).catch(() => { if (!cancelled) setPlanAssessments([]) })
+    return () => { cancelled = true }
+  }, [selected?.id, selected?.version, selected?.plan_status])
+  const choosePlan = async (id: number) => { await plans.select(id); await segments.load(id); setNotice(null); setLocalError(null) }
   const createPlan = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setLocalError(null)
     try {
@@ -64,7 +77,20 @@ export function PlansPage() {
     catch (error) { setLocalError(error instanceof Error ? error.message : 'Model run failed') }
     finally { setBusy(false) }
   }
+  const confirmReopen = async (reason: string) => {
+    if (!selected) return
+    setBusy(true); setLocalError(null); setNotice(null)
+    try {
+      const result = await plans.reopen(selected.id, selected.version, reason)
+      setReopenOpen(false)
+      setPlanAssessments((items) => items.map((item) => item.id === result.superseded_assessment.id ? result.superseded_assessment : item))
+      await plans.select(selected.id)
+      setNotice(`Plan returned to draft; assessment #${result.superseded_assessment.id} superseded and closed to review.`)
+    } catch (error) { setLocalError(error instanceof Error ? error.message : 'Reopen failed') }
+    finally { setBusy(false) }
+  }
   const mixTotal = useMemo(() => planForm.breathing_mix.o2 + planForm.breathing_mix.he, [planForm.breathing_mix])
+  const canReopen = isPlanner && !!selected && reopenableStatuses.has(selected.plan_status)
   return (
     <div className="page">
       <PageHeader eyebrow="VERSIONED EXPOSURE INPUT" title="Plan assembly" detail="Build ordered depth and gas assumptions before deterministic offline modeling." actions={isPlanner && <Button variant="contained" startIcon={<CirclePlus size={17} />} onClick={() => setFormMode(formMode === 'plan' ? null : 'plan')}>New plan</Button>} />
@@ -89,7 +115,8 @@ export function PlansPage() {
         <section className="sequence-board">
           {selected ? <>
             <div className="sequence-head"><div><span className="eyebrow">PLAN INPUT / V{selected.version}</span><h2>{selected.plan_code}</h2><p>{selected.diver_profile_code} · {selected.worksite_pressure_bar.toFixed(2)} bar · O2 {(selected.breathing_mix.o2 * 100).toFixed(0)} / He {(selected.breathing_mix.he * 100).toFixed(0)}</p></div><PlanStatusBadge status={selected.plan_status} /></div>
-            <div className="sequence-toolbar"><div><Rows3 size={17} /><span>{segments.items.length} ordered segments</span></div>{isPlanner && selected.plan_status === 'draft' && <div><Button size="small" startIcon={<CirclePlus size={16} />} onClick={() => { setSegmentForm({ ...segmentInitial, gas_mix: selected.breathing_mix }); setFormMode(formMode === 'segment' ? null : 'segment') }}>Add segment</Button><Button size="small" variant="contained" startIcon={<Play size={16} />} onClick={() => void model()} disabled={busy || segments.items.length === 0}>Run model</Button></div>}</div>
+            {latestAssessment?.assessment_status === 'superseded' && <Alert severity="warning" icon={<History size={20} />}>Latest assessment #{latestAssessment.id} was superseded and is closed to review. Reopen reason: {latestAssessment.supersede_reason}. Its input snapshot remains readable on the assessment page.</Alert>}
+            <div className="sequence-toolbar"><div><Rows3 size={17} /><span>{segments.items.length} ordered segments</span></div>{isPlanner && selected.plan_status === 'draft' && <div><Button size="small" startIcon={<CirclePlus size={16} />} onClick={() => { setSegmentForm({ ...segmentInitial, gas_mix: selected.breathing_mix }); setFormMode(formMode === 'segment' ? null : 'segment') }}>Add segment</Button><Button size="small" variant="contained" startIcon={<Play size={16} />} onClick={() => void model()} disabled={busy || segments.items.length === 0}>Run model</Button></div>}{canReopen && <div><Button size="small" color="warning" variant="outlined" startIcon={<History size={16} />} onClick={() => setReopenOpen(true)} disabled={busy}>Reopen &amp; replace</Button></div>}</div>
             {formMode === 'segment' && <form className="segment-form" onSubmit={createSegment}>
               <span className="sequence-token">{String(segments.items.length + 1).padStart(2, '0')}</span>
               <TextField select label="Type" value={segmentForm.segment_type} onChange={(event) => setSegmentForm({ ...segmentForm, segment_type: event.target.value as SegmentType })}>{['descent', 'bottom', 'transit', 'ascent', 'surface'].map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>
@@ -103,6 +130,8 @@ export function PlansPage() {
           </> : <div className="empty-state">Select a plan to inspect its ordered input.</div>}
         </section>
       </div>
+      {selected && <ReopenDialog open={reopenOpen} planCode={selected.plan_code} version={selected.version} busy={busy} onClose={() => setReopenOpen(false)} onConfirm={confirmReopen} />}
     </div>
   )
 }
+

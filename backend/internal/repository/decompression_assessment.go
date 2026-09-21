@@ -102,12 +102,15 @@ func (r *DecompressionAssessmentRepository) Transition(ctx context.Context, plan
 		if planResult.RowsAffected != 1 {
 			return util.Conflict("PLAN_VERSION_CONFLICT", "plan state or version changed concurrently", nil)
 		}
-		assessmentResult := tx.Model(&model.DecompressionAssessment{}).Where("id = ? AND assessment_status = ?", assessment.ID, assessment.AssessmentStatus).Updates(assessmentChanges)
+		// The assessment row can only move when it still represents the plan's
+		// current review state, so a superseded snapshot can never be
+		// submitted or approved, even if a caller bypasses service guards.
+		assessmentResult := tx.Model(&model.DecompressionAssessment{}).Where("id = ? AND assessment_status = ?", assessment.ID, string(plan.PlanStatus)).Updates(assessmentChanges)
 		if assessmentResult.Error != nil {
 			return fmt.Errorf("transition assessment metadata: %w", assessmentResult.Error)
 		}
 		if assessmentResult.RowsAffected != 1 {
-			return util.Conflict("ASSESSMENT_STATE_CONFLICT", "assessment review state changed concurrently", nil)
+			return util.Conflict("ASSESSMENT_STATE_CONFLICT", "assessment review state changed concurrently or the result was superseded", nil)
 		}
 		entry.EntityID = assessment.ID
 		if err := r.audit.RecordWithDB(ctx, tx, entry); err != nil {
@@ -123,4 +126,67 @@ func (r *DecompressionAssessmentRepository) Transition(ctx context.Context, plan
 		return fmt.Errorf("transition assessment transaction: %w", err)
 	}
 	return nil
+}
+
+// Reopen returns a modeled/review plan to draft and, in the same transaction,
+// marks its latest assessment superseded with the planner's reason. Both the
+// plan version/status and the assessment status are used as optimistic guards,
+// so an approved plan, a stale client version, or a concurrent reopen rejects
+// the whole transaction without changing either row.
+func (r *DecompressionAssessmentRepository) Reopen(ctx context.Context, plan model.DivePlan, assessment model.DecompressionAssessment, reason string, entry audit.Entry) (model.DivePlan, model.DecompressionAssessment, error) {
+	updatedPlan := model.DivePlan{}
+	updatedAssessment := model.DecompressionAssessment{}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var latest model.DecompressionAssessment
+		if err := tx.Where("plan_id = ?", plan.ID).Order("created_at DESC, id DESC").First(&latest).Error; err != nil {
+			return fmt.Errorf("load latest assessment for reopen %d: %w", plan.ID, err)
+		}
+		if latest.ID != assessment.ID || string(plan.PlanStatus) != latest.AssessmentStatus {
+			return util.Conflict("ASSESSMENT_STATE_CONFLICT", "latest assessment no longer matches the plan review state", nil)
+		}
+		planResult := tx.Model(&model.DivePlan{}).
+			Where("id = ? AND version = ? AND plan_status IN ?", plan.ID, plan.Version, []constants.PlanStatus{constants.PlanModeled, constants.PlanPendingReview}).
+			Updates(map[string]any{"plan_status": constants.PlanDraft, "version": gorm.Expr("version + 1"), "reviewed_by": nil})
+		if planResult.Error != nil {
+			return fmt.Errorf("reopen dive plan: %w", planResult.Error)
+		}
+		if planResult.RowsAffected != 1 {
+			return util.Conflict("PLAN_VERSION_CONFLICT", "plan state or version changed concurrently", nil)
+		}
+		assessmentResult := tx.Model(&model.DecompressionAssessment{}).
+			Where("id = ? AND assessment_status = ? AND (supersede_reason = '' OR supersede_reason IS NULL)", latest.ID, latest.AssessmentStatus).
+			Updates(map[string]any{"assessment_status": string(constants.AssessmentSuperseded), "supersede_reason": reason})
+		if assessmentResult.Error != nil {
+			return fmt.Errorf("supersede latest assessment: %w", assessmentResult.Error)
+		}
+		if assessmentResult.RowsAffected != 1 {
+			return util.Conflict("ASSESSMENT_STATE_CONFLICT", "assessment review state changed concurrently", nil)
+		}
+		if err := tx.First(&updatedPlan, plan.ID).Error; err != nil {
+			return fmt.Errorf("reload reopened plan: %w", err)
+		}
+		if err := tx.First(&updatedAssessment, latest.ID).Error; err != nil {
+			return fmt.Errorf("reload superseded assessment: %w", err)
+		}
+		assessmentEntry := entry
+		assessmentEntry.Action = "decompression_assessment.supersede"
+		assessmentEntry.EntityType = "decompression_assessment"
+		assessmentEntry.EntityID = latest.ID
+		assessmentEntry.BeforeSummary = latest.AssessmentStatus
+		assessmentEntry.AfterSummary = string(constants.AssessmentSuperseded) + " reason=" + reason
+		if err := r.audit.RecordWithDB(ctx, tx, assessmentEntry); err != nil {
+			return err
+		}
+		planEntry := entry
+		planEntry.Action = "dive_plan.reopen"
+		planEntry.EntityType = "dive_plan"
+		planEntry.EntityID = plan.ID
+		planEntry.BeforeSummary = string(plan.PlanStatus)
+		planEntry.AfterSummary = fmt.Sprintf("%s assessment=%d reason=%s", constants.PlanDraft, latest.ID, reason)
+		return r.audit.RecordWithDB(ctx, tx, planEntry)
+	})
+	if err != nil {
+		return model.DivePlan{}, model.DecompressionAssessment{}, fmt.Errorf("reopen plan transaction: %w", err)
+	}
+	return updatedPlan, updatedAssessment, nil
 }
