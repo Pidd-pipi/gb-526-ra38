@@ -9,7 +9,12 @@ const labels: Record<PlanStatus, string> = {
   archived: 'ARCHIVED',
 }
 
+const assessmentLabels: Record<string, string> = {
+  superseded: 'SUPERSEDED · NOT REVIEWABLE',
+}
+
 export function PlanStatusBadge({ status }: { status: PlanStatus | string }) {
   const value = status as PlanStatus
-  return <Chip size="small" className={`status-badge status-${value}`} label={labels[value] ?? status.replaceAll('_', ' ').toUpperCase()} />
+  const label = labels[value] ?? assessmentLabels[status] ?? status.replaceAll('_', ' ').toUpperCase()
+  return <Chip size="small" className={`status-badge status-${value}`} label={label} />
 }

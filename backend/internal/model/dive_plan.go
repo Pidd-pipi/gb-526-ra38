@@ -16,6 +16,7 @@ type DivePlan struct {
 	CreatedBy           uint                 `gorm:"not null;index" json:"created_by"`
 	ReviewedBy          *uint                `gorm:"index" json:"reviewed_by"`
 	Version             uint                 `gorm:"not null;default:1" json:"version"`
+	LastReopenReason    string               `gorm:"size:300;not null;default:''" json:"last_reopen_reason"`
 	PlannedAt           time.Time            `gorm:"not null;index" json:"planned_at"`
 	CreatedAt           time.Time            `json:"created_at"`
 	UpdatedAt           time.Time            `json:"updated_at"`

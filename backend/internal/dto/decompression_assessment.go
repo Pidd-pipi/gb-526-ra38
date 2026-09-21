@@ -25,6 +25,8 @@ type AssessmentResponse struct {
 	HighestRiskBand  constants.RiskBand               `json:"highest_risk_band"`
 	ComparativeScore float64                          `json:"comparative_score"`
 	Assumptions      decompression.ModelAssumptions   `json:"assumptions"`
+	SupersededReason string                           `json:"superseded_reason,omitempty"`
+	SupersededAt     *time.Time                       `json:"superseded_at,omitempty"`
 	CreatedAt        time.Time                        `json:"created_at"`
 	ReviewedAt       *time.Time                       `json:"reviewed_at"`
 	SafetyDisclaimer string                           `json:"safety_disclaimer"`
@@ -42,7 +44,7 @@ type AssessmentComparison struct {
 const SafetyDisclaimer = "Training and decision support only. This result is not medical advice, a certified dive table, a safety clearance, or an executable decompression instruction. Human supervisor review is required."
 
 func DecodeAssessment(item model.DecompressionAssessment) (AssessmentResponse, error) {
-	response := AssessmentResponse{ID: item.ID, PlanID: item.PlanID, AssessmentStatus: item.AssessmentStatus, AlgorithmVersion: item.AlgorithmVersion, HighestRiskBand: item.HighestRiskBand, ComparativeScore: item.ComparativeScore, CreatedAt: item.CreatedAt, ReviewedAt: item.ReviewedAt, SafetyDisclaimer: SafetyDisclaimer}
+	response := AssessmentResponse{ID: item.ID, PlanID: item.PlanID, AssessmentStatus: item.AssessmentStatus, AlgorithmVersion: item.AlgorithmVersion, HighestRiskBand: item.HighestRiskBand, ComparativeScore: item.ComparativeScore, SupersededReason: item.SupersededReason, SupersededAt: item.SupersededAt, CreatedAt: item.CreatedAt, ReviewedAt: item.ReviewedAt, SafetyDisclaimer: SafetyDisclaimer}
 	parts := []struct {
 		name string
 		raw  string

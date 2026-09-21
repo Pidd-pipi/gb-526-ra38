@@ -107,6 +107,9 @@ func (s *DecompressionAssessmentService) transition(ctx context.Context, id uint
 	if err != nil {
 		return dto.AssessmentResponse{}, err
 	}
+	if assessment.AssessmentStatus == constants.AssessmentSuperseded {
+		return dto.AssessmentResponse{}, util.Conflict("ASSESSMENT_SUPERSEDED", "this assessment was superseded by a plan reopen and can no longer be submitted or approved", nil)
+	}
 	plan, err := s.plans.Get(ctx, assessment.PlanID)
 	if err != nil {
 		return dto.AssessmentResponse{}, err

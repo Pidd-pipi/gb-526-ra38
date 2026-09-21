@@ -8,3 +8,6 @@ export const createPlan = (input: CreateDivePlan) => request<DivePlan>('/plans',
 export const archivePlan = (id: number, version: number, reason: string) => request<DivePlan>(`/plans/${id}/archive`, {
   method: 'POST', body: JSON.stringify({ target_status: 'archived' satisfies PlanStatus, version, reason }),
 })
+export const reopenPlan = (id: number, version: number, reason: string) => request<DivePlan>(`/plans/${id}/reopen`, {
+  method: 'POST', body: JSON.stringify({ version, reason }),
+})

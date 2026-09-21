@@ -52,7 +52,7 @@ func main() {
 
 	authService := auth.NewService(authRepo, cfg.JWTSecret, cfg.JWTTTL)
 	profileService := service.NewDiverProfileService(profileRepo, planRepo)
-	planService := service.NewDivePlanService(planRepo, profileRepo)
+	planService := service.NewDivePlanService(planRepo, profileRepo, assessmentRepo)
 	segmentService := service.NewExposureSegmentService(segmentRepo, planRepo, cfg.MaxSegments)
 	assessmentService := service.NewDecompressionAssessmentService(assessmentRepo, planRepo, profileRepo, segmentRepo, cfg.ModelVersion, cfg.MaxSegments)
 

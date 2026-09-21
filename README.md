@@ -62,6 +62,12 @@ docker compose down -v --remove-orphans
 - 后端：`backend/internal/constants/plan.go`，并贯穿 `model/dive_plan.go`、`repository/dive_plan.go`、`repository/decompression_assessment.go`、对应 service/handler/router。
 - 前端：`frontend/src/types/plan.ts`、`stores/plan.ts`、`stores/assessment.ts`、`components/common/PlanStatusBadge.tsx`、`pages/PlansPage.tsx`、`pages/AssessmentsPage.tsx`、`pages/AuditPage.tsx`。
 
+评估另有专属状态 `superseded`（已替代，仅 `decompression_assessments.assessment_status` 使用，计划不会进入该状态）：
+
+- 数据库：评估表 `CHECK` 约束包含 `superseded`，替代原因/时间保存在 `superseded_reason`、`superseded_at`；计划侧最近一次重开原因保存在 `dive_plans.last_reopen_reason`。
+- 后端：常量 `constants.AssessmentSuperseded` 与 `constants.CanReopenPlan`（`plan.go`），重开编排 `service/dive_plan.go` 的 `Reopen`，单一事务 `repository/decompression_assessment.go` 的 `ReopenAndSupersede`，替代拦截位于 `service/decompression_assessment.go`。
+- 前端：`types/assessment.ts`、`api/plan.ts`（`/plans/:id/reopen`）、`stores/plan.ts` 的 `reopen`、`components/common/PlanStatusBadge.tsx`、`pages/PlansPage.tsx`（替代原因与重开入口）、`pages/AssessmentsPage.tsx`（旧结果不可审核标识）。
+
 `RiskBand = informational | caution | elevated | invalid`
 
 - 数据库：评估表的 `risk_flags_json` 保存完整不可覆盖证据，`highest_risk_band` 使用显式 `CHECK` 约束。
@@ -72,10 +78,18 @@ docker compose down -v --remove-orphans
 
 ```text
 draft -> modeled -> pending_supervisor_review -> approved_for_training -> archived
-                 \-> draft（退回）
+  ^         |                 |
+  |_________|_________________|   reopen-and-supersede（仅 modeled / pending_supervisor_review）
 ```
 
 模型输入失败不创建评估，并保持或恢复 `draft`；主管批准在单一事务中使用状态和版本条件更新，同时写审计理由。
+
+重开并替代闭环（计划员）：
+
+1. 仅 `modeled` 或 `pending_supervisor_review` 的计划可携带当前 `version` 与 `reason` 调用 `POST /api/v1/plans/:id/reopen`。
+2. 同一事务内计划退回 `draft` 并推进版本、写入 `last_reopen_reason`，最新评估置为 `superseded` 并记录 `superseded_reason/superseded_at`；旧评估的输入快照与组织负荷 JSON 原样保留，可随时回读重放。
+3. 已批准/已归档、版本过期（`PLAN_VERSION_CONFLICT`）或并发重开（`ASSESSMENT_STATE_CONFLICT`）整次拒绝：条件更新影响 0 行时事务回滚，计划与评估状态均不变。
+4. `superseded` 评估不能再提交或批准（`ASSESSMENT_SUPERSEDED`）；计划退回 draft 重新建模成功后产生全新评估，旧评估始终失效。
 
 ## API
 
@@ -85,6 +99,8 @@ draft -> modeled -> pending_supervisor_review -> approved_for_training -> archiv
 | `GET/POST/PUT` | `/api/v1/divers`、`/divers/:id` | 档案列表、创建、更新 |
 | `GET` | `/api/v1/divers/:id/plans` | 档案关联方案 |
 | `GET/POST` | `/api/v1/plans` | 方案列表与创建 |
+| `POST` | `/api/v1/plans/:id/reopen` | 计划员携带 `version`+`reason` 重开：计划回 draft，最新评估同事务置为 superseded |
+| `GET` | `/api/v1/plans/:id` | 方案详情，含 `last_reopen_reason` |
 | `GET/POST/PUT` | `/api/v1/plans/:id/segments`、`/segments/:id` | 暴露段列表、创建、更新 |
 | `PUT` | `/api/v1/plans/:id/segments/order` | 事务化重排并推进输入版本 |
 | `POST` | `/api/v1/plans/:id/assessments/run` | 校验并创建不可覆盖评估 |
@@ -94,7 +110,7 @@ draft -> modeled -> pending_supervisor_review -> approved_for_training -> archiv
 | `POST` | `/api/v1/assessments/:id/approve` | 主管人工批准训练用途 |
 | `GET` | `/api/v1/audit-events` | 主管/管理员读取不可删除审计轨迹 |
 
-统一响应包含 `data` 或 `error` 及 `request_id`。主要错误码包括 `INVALID_GAS_MIX`、`SEGMENT_SEQUENCE_CONFLICT`、`MODEL_INPUT_INVALID`、`PLAN_VERSION_CONFLICT`、`INVALID_PLAN_TRANSITION`、`AUTH_REQUIRED` 和 `FORBIDDEN`。
+统一响应包含 `data` 或 `error` 及 `request_id`。主要错误码包括 `INVALID_GAS_MIX`、`SEGMENT_SEQUENCE_CONFLICT`、`MODEL_INPUT_INVALID`、`PLAN_VERSION_CONFLICT`、`INVALID_PLAN_TRANSITION`、`PLAN_REOPEN_NOT_ALLOWED`、`ASSESSMENT_SUPERSEDED`、`ASSESSMENT_STATE_CONFLICT`、`AUTH_REQUIRED` 和 `FORBIDDEN`。
 
 ## 技术栈与目录
 

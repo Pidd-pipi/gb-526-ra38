@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Alert, Button, CircularProgress, IconButton, MenuItem, TextField, Tooltip } from '@mui/material'
-import { ArrowDown, ArrowUp, Beaker, CirclePlus, Play, Route, Rows3 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Beaker, CirclePlus, History, Play, RotateCcw, Route, Rows3 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { PlanStatusBadge } from '@/components/common/PlanStatusBadge'
 import { useAuth } from '@/hooks/useAuth'
@@ -22,7 +22,8 @@ export function PlansPage() {
   const runAssessment = useAssessmentStore((state) => state.run)
   const [planForm, setPlanForm] = useState(planInitial)
   const [segmentForm, setSegmentForm] = useState(segmentInitial)
-  const [formMode, setFormMode] = useState<'plan' | 'segment' | null>(null)
+  const [formMode, setFormMode] = useState<'plan' | 'segment' | 'reopen' | null>(null)
+  const [reopenReason, setReopenReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -64,6 +65,19 @@ export function PlansPage() {
     catch (error) { setLocalError(error instanceof Error ? error.message : 'Model run failed') }
     finally { setBusy(false) }
   }
+  const reopen = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selected) return
+    setBusy(true); setLocalError(null); setNotice(null)
+    try {
+      await plans.reopen(selected.id, selected.version, reopenReason.trim())
+      await segments.load(selected.id)
+      setFormMode(null); setReopenReason('')
+      setNotice('Plan returned to draft; the latest assessment was marked superseded and its snapshot stays readable.')
+    } catch (error) { setLocalError(error instanceof Error ? error.message : 'Reopen failed') }
+    finally { setBusy(false) }
+  }
+  const canReopen = isPlanner && (selected?.plan_status === 'modeled' || selected?.plan_status === 'pending_supervisor_review')
   const mixTotal = useMemo(() => planForm.breathing_mix.o2 + planForm.breathing_mix.he, [planForm.breathing_mix])
   return (
     <div className="page">
@@ -89,7 +103,13 @@ export function PlansPage() {
         <section className="sequence-board">
           {selected ? <>
             <div className="sequence-head"><div><span className="eyebrow">PLAN INPUT / V{selected.version}</span><h2>{selected.plan_code}</h2><p>{selected.diver_profile_code} · {selected.worksite_pressure_bar.toFixed(2)} bar · O2 {(selected.breathing_mix.o2 * 100).toFixed(0)} / He {(selected.breathing_mix.he * 100).toFixed(0)}</p></div><PlanStatusBadge status={selected.plan_status} /></div>
-            <div className="sequence-toolbar"><div><Rows3 size={17} /><span>{segments.items.length} ordered segments</span></div>{isPlanner && selected.plan_status === 'draft' && <div><Button size="small" startIcon={<CirclePlus size={16} />} onClick={() => { setSegmentForm({ ...segmentInitial, gas_mix: selected.breathing_mix }); setFormMode(formMode === 'segment' ? null : 'segment') }}>Add segment</Button><Button size="small" variant="contained" startIcon={<Play size={16} />} onClick={() => void model()} disabled={busy || segments.items.length === 0}>Run model</Button></div>}</div>
+            {selected.last_reopen_reason && <Alert severity="warning" icon={<History size={20} />}>Latest reopen reason: {selected.last_reopen_reason} — the prior assessment is superseded and cannot be reviewed.</Alert>}
+            <div className="sequence-toolbar"><div><Rows3 size={17} /><span>{segments.items.length} ordered segments</span></div>{isPlanner && selected.plan_status === 'draft' && <div><Button size="small" startIcon={<CirclePlus size={16} />} onClick={() => { setSegmentForm({ ...segmentInitial, gas_mix: selected.breathing_mix }); setFormMode(formMode === 'segment' ? null : 'segment') }}>Add segment</Button><Button size="small" variant="contained" startIcon={<Play size={16} />} onClick={() => void model()} disabled={busy || segments.items.length === 0}>Run model</Button></div>}{canReopen && <div><Button size="small" color="warning" variant="outlined" startIcon={<RotateCcw size={16} />} onClick={() => { setReopenReason(''); setFormMode(formMode === 'reopen' ? null : 'reopen') }} disabled={busy}>Reopen and replace</Button></div>}</div>
+            {formMode === 'reopen' && <form className="inline-form reopen-form" onSubmit={reopen}>
+              <div className="section-title" style={{ gridColumn: '1 / -1' }}><RotateCcw size={19} /><div><strong>Reopen and supersede latest assessment</strong><span>The plan returns to draft at a new input version; the current result stays readable but can no longer be submitted or approved.</span></div></div>
+              <TextField label="Reopen reason" value={reopenReason} onChange={(event) => setReopenReason(event.target.value)} inputProps={{ minLength: 3, maxLength: 300 }} required fullWidth sx={{ gridColumn: '1 / -1' }} placeholder="Explain which modeled assumption must change" helperText={`Current version ${selected.version} is sent with this request; a stale version is rejected wholesale.`} />
+              <div className="form-actions"><Button onClick={() => setFormMode(null)} disabled={busy}>Cancel</Button><Button type="submit" variant="contained" color="warning" startIcon={<RotateCcw size={16} />} disabled={busy || reopenReason.trim().length < 3}>Return plan to draft</Button></div>
+            </form>}
             {formMode === 'segment' && <form className="segment-form" onSubmit={createSegment}>
               <span className="sequence-token">{String(segments.items.length + 1).padStart(2, '0')}</span>
               <TextField select label="Type" value={segmentForm.segment_type} onChange={(event) => setSegmentForm({ ...segmentForm, segment_type: event.target.value as SegmentType })}>{['descent', 'bottom', 'transit', 'ascent', 'surface'].map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>

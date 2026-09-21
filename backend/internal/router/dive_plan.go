@@ -10,5 +10,6 @@ func RegisterDivePlanRoutes(api *gin.RouterGroup, h *handler.DivePlanHandler, wr
 	plans.GET("", h.List)
 	plans.GET("/:id", h.Get)
 	plans.POST("", write, h.Create)
+	plans.POST("/:id/reopen", write, h.Reopen)
 	plans.POST("/:id/archive", review, h.Archive)
 }

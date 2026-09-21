@@ -10,6 +10,11 @@ const (
 	PlanArchived         PlanStatus = "archived"
 )
 
+// AssessmentSuperseded marks an assessment whose result was replaced by a
+// planner reopen. The snapshot stays readable, but the result can no longer be
+// submitted or approved. It is an assessment-only state, never a plan state.
+const AssessmentSuperseded = "superseded"
+
 var planTransitions = map[PlanStatus]map[PlanStatus]bool{
 	PlanDraft:            {PlanModeled: true},
 	PlanModeled:          {PlanDraft: true, PlanPendingReview: true},
@@ -25,6 +30,13 @@ func ValidPlanStatus(status PlanStatus) bool {
 
 func CanTransitionPlan(from, to PlanStatus) bool {
 	return planTransitions[from][to]
+}
+
+// CanReopenPlan reports whether a plan in the given status may be sent back to
+// draft by a planner. Only a modeled plan or one awaiting supervisor review can
+// be reopened; approved or archived plans are closed to the loop.
+func CanReopenPlan(status PlanStatus) bool {
+	return status == PlanModeled || status == PlanPendingReview
 }
 
 func PlanStatuses() []PlanStatus {

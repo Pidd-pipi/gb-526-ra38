@@ -65,3 +65,20 @@ func (h *DivePlanHandler) Archive(c *gin.Context) {
 	}
 	util.OK(c, item)
 }
+
+func (h *DivePlanHandler) Reopen(c *gin.Context) {
+	id, ok := util.ParamID(c)
+	if !ok {
+		return
+	}
+	var req dto.ReopenPlanRequest
+	if !util.BindJSON(c, &req) {
+		return
+	}
+	item, err := h.service.Reopen(c.Request.Context(), id, req, auditActor(c))
+	if err != nil {
+		util.Fail(c, err)
+		return
+	}
+	util.OK(c, item)
+}

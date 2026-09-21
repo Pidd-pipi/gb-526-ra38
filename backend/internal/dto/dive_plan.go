@@ -32,6 +32,7 @@ type DivePlanResponse struct {
 	CreatedBy           uint                 `json:"created_by"`
 	ReviewedBy          *uint                `json:"reviewed_by"`
 	Version             uint                 `json:"version"`
+	LastReopenReason    string               `json:"last_reopen_reason"`
 	PlannedAt           time.Time            `json:"planned_at"`
 	CreatedAt           time.Time            `json:"created_at"`
 	UpdatedAt           time.Time            `json:"updated_at"`
@@ -41,6 +42,13 @@ type TransitionPlanRequest struct {
 	TargetStatus constants.PlanStatus `json:"target_status" binding:"required"`
 	Version      uint                 `json:"version" binding:"required,min=1"`
 	Reason       string               `json:"reason" binding:"required,min=3,max=300"`
+}
+
+// ReopenPlanRequest carries the plan version the planner saw and the reason for
+// sending a modeled or review-pending plan back to draft.
+type ReopenPlanRequest struct {
+	Version uint   `json:"version" binding:"required,min=1"`
+	Reason  string `json:"reason" binding:"required,min=3,max=300"`
 }
 
 func (r CreateDivePlanRequest) ValidateBusiness() error {
@@ -66,6 +74,7 @@ func NewDivePlanResponse(item model.DivePlan, profileCode string) (DivePlanRespo
 		ID: item.ID, PlanCode: item.PlanCode, DiverProfileID: item.DiverProfileID, DiverProfileCode: profileCode,
 		WorksitePressureBar: item.WorksitePressureBar, BreathingMix: mix, PlanStatus: item.PlanStatus,
 		CreatedBy: item.CreatedBy, ReviewedBy: item.ReviewedBy, Version: item.Version,
-		PlannedAt: item.PlannedAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
+		LastReopenReason: item.LastReopenReason,
+		PlannedAt:        item.PlannedAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
 	}, nil
 }

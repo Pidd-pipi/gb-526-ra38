@@ -86,6 +86,45 @@ func (r *DecompressionAssessmentRepository) CreateModeled(ctx context.Context, p
 	return nil
 }
 
+// ReopenAndSupersede sends a modeled/review-pending plan back to draft and
+// marks its latest assessment superseded in one transaction. The conditional
+// updates key on both version and status, so a stale version, a plan that was
+// approved, or a concurrent reopen/update affects zero rows and rolls the whole
+// transaction back, leaving plan and assessment states unchanged.
+func (r *DecompressionAssessmentRepository) ReopenAndSupersede(ctx context.Context, plan model.DivePlan, assessment model.DecompressionAssessment, reason string, planEntry, assessmentEntry audit.Entry) error {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		planResult := tx.Model(&model.DivePlan{}).
+			Where("id = ? AND version = ? AND plan_status IN ?", plan.ID, plan.Version, []constants.PlanStatus{constants.PlanModeled, constants.PlanPendingReview}).
+			Updates(map[string]any{"plan_status": constants.PlanDraft, "version": gorm.Expr("version + 1"), "last_reopen_reason": reason})
+		if planResult.Error != nil {
+			return fmt.Errorf("reopen dive plan: %w", planResult.Error)
+		}
+		if planResult.RowsAffected != 1 {
+			return util.Conflict("PLAN_VERSION_CONFLICT", "plan state or version changed concurrently; reopen rejected", nil)
+		}
+		now := time.Now().UTC()
+		assessmentResult := tx.Model(&model.DecompressionAssessment{}).
+			Where("id = ? AND plan_id = ? AND assessment_status IN ?", assessment.ID, plan.ID, []string{string(constants.PlanModeled), string(constants.PlanPendingReview)}).
+			Updates(map[string]any{"assessment_status": constants.AssessmentSuperseded, "superseded_reason": reason, "superseded_at": now})
+		if assessmentResult.Error != nil {
+			return fmt.Errorf("supersede latest assessment: %w", assessmentResult.Error)
+		}
+		if assessmentResult.RowsAffected != 1 {
+			return util.Conflict("ASSESSMENT_STATE_CONFLICT", "latest assessment review state changed concurrently; reopen rejected", nil)
+		}
+		assessmentEntry.EntityID = assessment.ID
+		if err := r.audit.RecordWithDB(ctx, tx, assessmentEntry); err != nil {
+			return err
+		}
+		planEntry.EntityID = plan.ID
+		return r.audit.RecordWithDB(ctx, tx, planEntry)
+	})
+	if err != nil {
+		return fmt.Errorf("reopen and supersede transaction: %w", err)
+	}
+	return nil
+}
+
 func (r *DecompressionAssessmentRepository) Transition(ctx context.Context, plan model.DivePlan, assessment model.DecompressionAssessment, target constants.PlanStatus, actorID uint, entry audit.Entry) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		planChanges := map[string]any{"plan_status": target, "version": gorm.Expr("version + 1")}

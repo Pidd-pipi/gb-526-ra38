@@ -30,6 +30,7 @@ export interface DivePlan {
   created_by: number
   reviewed_by?: number
   version: number
+  last_reopen_reason?: string
   planned_at: string
   created_at: string
   updated_at: string

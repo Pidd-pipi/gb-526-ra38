@@ -16,12 +16,13 @@ import (
 )
 
 type DivePlanService struct {
-	plans    *repository.DivePlanRepository
-	profiles *repository.DiverProfileRepository
+	plans       *repository.DivePlanRepository
+	profiles    *repository.DiverProfileRepository
+	assessments *repository.DecompressionAssessmentRepository
 }
 
-func NewDivePlanService(plans *repository.DivePlanRepository, profiles *repository.DiverProfileRepository) *DivePlanService {
-	return &DivePlanService{plans: plans, profiles: profiles}
+func NewDivePlanService(plans *repository.DivePlanRepository, profiles *repository.DiverProfileRepository, assessments *repository.DecompressionAssessmentRepository) *DivePlanService {
+	return &DivePlanService{plans: plans, profiles: profiles, assessments: assessments}
 }
 
 func (s *DivePlanService) List(ctx context.Context, search, status, profileRaw string, page, size int) ([]dto.DivePlanResponse, int64, error) {
@@ -118,6 +119,44 @@ func (s *DivePlanService) Archive(ctx context.Context, id uint, req dto.Transiti
 	actor.BeforeSummary = string(current.PlanStatus)
 	actor.AfterSummary = fmt.Sprintf("%s reason=%s", req.TargetStatus, strings.TrimSpace(req.Reason))
 	if err := s.plans.Transition(ctx, current, req.TargetStatus, &actor.ActorID, actor); err != nil {
+		return dto.DivePlanResponse{}, err
+	}
+	return s.Get(ctx, id)
+}
+
+// Reopen sends a modeled or review-pending plan back to draft and supersedes
+// its latest assessment in the same transaction. An approved/archived plan, a
+// stale version, or a concurrent reopen rejects the entire operation.
+func (s *DivePlanService) Reopen(ctx context.Context, id uint, req dto.ReopenPlanRequest, actor audit.Entry) (dto.DivePlanResponse, error) {
+	reason := strings.TrimSpace(req.Reason)
+	current, err := s.plans.Get(ctx, id)
+	if err != nil {
+		return dto.DivePlanResponse{}, err
+	}
+	if current.Version != req.Version {
+		return dto.DivePlanResponse{}, util.Conflict("PLAN_VERSION_CONFLICT", "dive plan was changed by another user", nil)
+	}
+	if !constants.CanReopenPlan(current.PlanStatus) {
+		return dto.DivePlanResponse{}, util.Conflict("PLAN_REOPEN_NOT_ALLOWED", fmt.Sprintf("a plan in status %s cannot be reopened", current.PlanStatus), nil)
+	}
+	latest, err := s.assessments.LatestByPlan(ctx, id)
+	if err != nil {
+		return dto.DivePlanResponse{}, util.Conflict("ASSESSMENT_STATE_CONFLICT", "no latest assessment is available to supersede", err)
+	}
+	if latest.AssessmentStatus != string(current.PlanStatus) {
+		return dto.DivePlanResponse{}, util.Conflict("ASSESSMENT_STATE_CONFLICT", "latest assessment and plan review states do not match; reopen rejected", nil)
+	}
+	planEntry := actor
+	planEntry.Action = "dive_plan.reopen"
+	planEntry.EntityType = "dive_plan"
+	planEntry.BeforeSummary = fmt.Sprintf("%s version=%d", current.PlanStatus, current.Version)
+	planEntry.AfterSummary = fmt.Sprintf("%s reason=%s", constants.PlanDraft, reason)
+	assessmentEntry := actor
+	assessmentEntry.Action = "decompression_assessment.superseded"
+	assessmentEntry.EntityType = "decompression_assessment"
+	assessmentEntry.BeforeSummary = fmt.Sprintf("%s assessment=%d", latest.AssessmentStatus, latest.ID)
+	assessmentEntry.AfterSummary = fmt.Sprintf("%s reason=%s snapshot_readable=true", constants.AssessmentSuperseded, reason)
+	if err := s.assessments.ReopenAndSupersede(ctx, current, latest, reason, planEntry, assessmentEntry); err != nil {
 		return dto.DivePlanResponse{}, err
 	}
 	return s.Get(ctx, id)
